@@ -4,6 +4,10 @@ Lutop is a lightweight macOS menu bar resource monitor. It shows a compact termi
 
 It is designed to stay small: no Dock icon, no package installer, no background helper daemon, no usage cache, and no telemetry.
 
+## Preview
+
+![Lutop menu bar resource monitor preview](docs/assets/lutop-preview.png)
+
 ## Features
 
 - Menu bar CPU / memory summary.
