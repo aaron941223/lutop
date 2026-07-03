@@ -1,6 +1,6 @@
 # Lutop
 
-Lutop is a lightweight macOS menu bar resource monitor. It shows a compact terminal-style system dashboard with CPU, memory, disk, power, processes, network, and local Codex / Claude Code quota information.
+Lutop is a lightweight macOS menu bar resource monitor with a Mole-style compact terminal dashboard. It shows CPU, memory, disk, power, processes, network, and local Codex / Claude Code quota information in a dense two-column panel.
 
 It is designed to stay small: no Dock icon, no package installer, no background helper daemon, no usage cache, and no telemetry.
 
@@ -12,7 +12,7 @@ It is designed to stay small: no Dock icon, no package installer, no background 
 
 - Menu bar CPU / memory summary.
 - Click-to-open compact resource panel.
-- Two-column text dashboard inspired by terminal status tools.
+- Mole-style two-column text dashboard with compact section symbols.
 - CPU load, hottest cores, load average.
 - Memory used/free/swap.
 - Startup disk usage and disk read/write rates.
@@ -95,7 +95,7 @@ Lutop reads local system APIs and local quota files only. It does not upload dat
 
 ## Reference Projects
 
-Lutop's compact two-column dashboard style, section text symbols, and terminal-status feel are inspired by [Mole](https://github.com/tw93/mole), especially its `mo status` view.
+Lutop's compact two-column dashboard style, section text symbols, separator rhythm, color treatment, and terminal-status feel are explicitly inspired by [Mole](https://github.com/tw93/mole), especially its `mo status` view.
 
 Mole is licensed under GPL-3.0 and has its own trademark policy. Lutop uses its own name and does not use the Mole name or logo. Lutop is released under GPL-3.0-only to keep this relationship conservative and clear.
 
