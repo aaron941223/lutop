@@ -1735,12 +1735,31 @@ private final class QuotaMonitor: @unchecked Sendable {
 
     private func latestCodexRateLimit() -> CodexRateCandidate? {
         let files = latestJSONLFiles(in: codexSessionsDirectory(), limit: 80)
+        var latestActive: CodexRateCandidate?
+        var latestAny: CodexRateCandidate?
+        let now = Date()
+
         for file in files {
-            if let candidate = autoreleasepool(invoking: { latestCodexRateLimit(in: file) }) {
-                return candidate
+            guard let candidate = autoreleasepool(invoking: { latestCodexRateLimit(in: file) }) else {
+                continue
+            }
+            if latestAny == nil || candidate.date > latestAny!.date {
+                latestAny = candidate
+            }
+            if codexCandidateIsActive(candidate, now: now),
+               latestActive == nil || candidate.date > latestActive!.date {
+                latestActive = candidate
             }
         }
-        return nil
+        return latestActive ?? latestAny
+    }
+
+    private func codexCandidateIsActive(_ candidate: CodexRateCandidate, now: Date) -> Bool {
+        let resetDates = candidate.windows.compactMap(\.resetAt)
+        guard !resetDates.isEmpty else {
+            return true
+        }
+        return resetDates.contains { $0 > now }
     }
 
     private func latestCodexRateLimit(in file: URL) -> CodexRateCandidate? {
@@ -1826,19 +1845,36 @@ private final class QuotaMonitor: @unchecked Sendable {
             return []
         }
 
-        var files: [(url: URL, date: Date)] = []
+        var files: [(url: URL, sessionDate: Date, modificationDate: Date)] = []
         for case let url as URL in enumerator {
             guard url.pathExtension == "jsonl",
                   let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey]),
                   values.isRegularFile == true else {
                 continue
             }
-            files.append((url, codexSessionDate(from: url) ?? values.contentModificationDate ?? Date.distantPast))
+            let modificationDate = values.contentModificationDate ?? Date.distantPast
+            files.append((url, codexSessionDate(from: url) ?? modificationDate, modificationDate))
         }
-        return files
-            .sorted { $0.date > $1.date }
+
+        var selected: [URL] = []
+        var seen = Set<String>()
+        func append(_ url: URL) {
+            guard !seen.contains(url.path) else {
+                return
+            }
+            seen.insert(url.path)
+            selected.append(url)
+        }
+
+        files
+            .sorted { $0.modificationDate > $1.modificationDate }
             .prefix(limit)
-            .map(\.url)
+            .forEach { append($0.url) }
+        files
+            .sorted { $0.sessionDate > $1.sessionDate }
+            .prefix(limit)
+            .forEach { append($0.url) }
+        return selected
     }
 
     private func codexSessionDate(from url: URL) -> Date? {
