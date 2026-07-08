@@ -29,7 +29,7 @@ It is designed to stay small: no Dock icon, no package installer, no background 
 make run
 ```
 
-The app hides its Dock icon and stays in the system menu bar. Click the status item to open the panel. Right-click the status item for Start at Login and Claude Code usage connection controls.
+The app hides its Dock icon and stays in the system menu bar. Click the status item to open the panel. Right-click the status item for Start at Login, `Update Code Usage`, and Claude Code disconnect controls.
 
 ## Build App Bundle
 
@@ -76,9 +76,11 @@ Lutop scans recent local Codex session JSONL files under `~/.codex/sessions` and
 
 The panel displays remaining quota, not total token usage or API cost.
 
+Use the right-click menu item `Update Code Usage` to immediately rescan local Codex session quota without waiting for the normal background refresh interval.
+
 ## Claude Code Quota
 
-Claude Code quota is optional. Use the right-click menu item `Connect Claude Usage` to install a local status line bridge into `~/.claude/settings.json`.
+Claude Code quota is optional. Use the right-click menu item `Update Code Usage` to install or refresh the local status line bridge when `~/.claude` exists.
 
 The bridge:
 
@@ -87,7 +89,7 @@ The bridge:
 - sends the data to the running Lutop app through a local distributed notification,
 - preserves and restores the user's original Claude Code status line when disconnected.
 
-If `~/.claude` is not present, Lutop does not create it or modify Claude Code configuration.
+Claude Code quota is only updated after Claude Code emits its next status line JSON. If `~/.claude` is not present, Lutop only updates Codex usage and does not create or modify Claude Code configuration.
 
 ## Privacy
 

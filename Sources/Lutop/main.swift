@@ -188,21 +188,37 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc private func toggleClaudeUsage(_ sender: Any?) {
-        do {
-            if claudeUsageConnected {
-                try ClaudeBridgeManager.shared.disconnect()
-            } else {
-                try ClaudeBridgeManager.shared.connect()
+    @objc private func updateCodeUsage(_ sender: Any?) {
+        let shouldConnectClaude = ClaudeBridgeManager.shared.isClaudeAvailable && !ClaudeBridgeManager.shared.isConnected
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            QuotaMonitor.shared.refreshCodexNow()
+
+            var updateError: Error?
+            if shouldConnectClaude {
+                do {
+                    try ClaudeBridgeManager.shared.connect()
+                } catch {
+                    updateError = error
+                }
             }
+
+            Task { @MainActor in
+                self?.refreshClaudeUsageState()
+                self?.refresh()
+                if let updateError {
+                    self?.showAlert(title: "Unable to update Code Usage", message: updateError.localizedDescription)
+                }
+            }
+        }
+    }
+
+    @objc private func disconnectClaudeUsage(_ sender: Any?) {
+        do {
+            try ClaudeBridgeManager.shared.disconnect()
             refreshClaudeUsageState()
             refresh()
         } catch {
-            let alert = NSAlert()
-            alert.messageText = "Unable to update Claude Usage"
-            alert.informativeText = error.localizedDescription
-            alert.alertStyle = .warning
-            alert.runModal()
+            showAlert(title: "Unable to disconnect Claude Code Usage", message: error.localizedDescription)
         }
     }
 
@@ -214,6 +230,14 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func quit(_ sender: Any?) {
         NSApp.terminate(sender)
+    }
+
+    private func showAlert(title: String, message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.runModal()
     }
 
     private func showPanel(from sender: NSStatusBarButton) {
@@ -309,19 +333,15 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(loginItem)
         menu.addItem(.separator())
 
-        let claudeItemTitle: String
-        if !claudeUsageAvailable {
-            claudeItemTitle = "Connect Claude Usage (Claude not found)"
-        } else if claudeUsageConnected {
-            claudeItemTitle = "Disconnect Claude Usage"
-        } else {
-            claudeItemTitle = "Connect Claude Usage"
+        let usageItem = NSMenuItem(title: "Update Code Usage", action: #selector(updateCodeUsage(_:)), keyEquivalent: "")
+        usageItem.target = self
+        menu.addItem(usageItem)
+
+        if claudeUsageConnected {
+            let disconnectItem = NSMenuItem(title: "Disconnect Claude Code Usage", action: #selector(disconnectClaudeUsage(_:)), keyEquivalent: "")
+            disconnectItem.target = self
+            menu.addItem(disconnectItem)
         }
-        let claudeItem = NSMenuItem(title: claudeItemTitle, action: #selector(toggleClaudeUsage(_:)), keyEquivalent: "")
-        claudeItem.target = self
-        claudeItem.isEnabled = claudeUsageAvailable
-        claudeItem.state = claudeUsageConnected ? .on : .off
-        menu.addItem(claudeItem)
         menu.addItem(.separator())
 
         let quitItem = NSMenuItem(title: "Quit Lutop", action: #selector(quit(_:)), keyEquivalent: "q")
@@ -1611,6 +1631,15 @@ private final class QuotaMonitor: @unchecked Sendable {
         let snapshot = QuotaSnapshot(codex: codexStatus, claude: claudeStatusLocked(now: Date()))
         lock.unlock()
         return snapshot
+    }
+
+    func refreshCodexNow() {
+        let now = Date()
+        let status = scanCodexStatus(now: now)
+        lock.lock()
+        codexStatus = status
+        lastCodexScan = now
+        lock.unlock()
     }
 
     func setClaudeBridge(available: Bool, connected: Bool) {
