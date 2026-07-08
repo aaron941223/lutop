@@ -114,6 +114,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var startAtLoginEnabled = false
     private var claudeUsageAvailable = false
     private var claudeUsageConnected = false
+    private var isPanelVisible = false
     private lazy var panelWindow: NSPanel = {
         let window = NSPanel(
             contentRect: NSRect(origin: .zero, size: panel.bounds.size),
@@ -142,7 +143,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         startClaudeQuotaObserver()
         try? LoginItemManager.shared.migrateIfNeeded()
         startAtLoginEnabled = LoginItemManager.shared.isEnabled
-        refreshClaudeUsageState()
+        refreshClaudeUsageStateAsync()
 
         refresh()
         timer = Timer.scheduledTimer(
@@ -155,7 +156,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func togglePanel(_ sender: NSStatusBarButton) {
-        if panelWindow.isVisible {
+        if isPanelVisible {
             hidePanel()
             return
         }
@@ -180,30 +181,30 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             try LoginItemManager.shared.setEnabled(nextValue)
             startAtLoginEnabled = nextValue
         } catch {
-            let alert = NSAlert()
-            alert.messageText = "Unable to update Start at Login"
-            alert.informativeText = error.localizedDescription
-            alert.alertStyle = .warning
-            alert.runModal()
+            showAlert(title: "Unable to update Start at Login", message: error.localizedDescription)
         }
     }
 
     @objc private func updateCodeUsage(_ sender: Any?) {
-        let shouldConnectClaude = ClaudeBridgeManager.shared.isClaudeAvailable && !ClaudeBridgeManager.shared.isConnected
         DispatchQueue.global(qos: .utility).async { [weak self] in
             QuotaMonitor.shared.refreshCodexNow()
 
             var updateError: Error?
-            if shouldConnectClaude {
+            let claudeAvailable = ClaudeBridgeManager.shared.isClaudeAvailable
+            var claudeConnected = ClaudeBridgeManager.shared.isConnected
+            if claudeAvailable && !claudeConnected {
                 do {
                     try ClaudeBridgeManager.shared.connect()
+                    claudeConnected = ClaudeBridgeManager.shared.isConnected
                 } catch {
                     updateError = error
                 }
             }
 
             Task { @MainActor in
-                self?.refreshClaudeUsageState()
+                self?.claudeUsageAvailable = claudeAvailable
+                self?.claudeUsageConnected = claudeConnected
+                QuotaMonitor.shared.setClaudeBridge(available: claudeAvailable, connected: claudeConnected)
                 self?.refresh()
                 if let updateError {
                     self?.showAlert(title: "Unable to update Code Usage", message: updateError.localizedDescription)
@@ -224,7 +225,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func handleClaudeQuotaNotification(_ notification: Notification) {
         QuotaMonitor.shared.updateClaude(from: notification.userInfo)
-        refreshClaudeUsageState()
+        refreshClaudeUsageStateAsync()
         refresh()
     }
 
@@ -247,6 +248,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let sourceWindow = sender.window else {
             panelWindow.setFrame(NSRect(origin: .zero, size: size), display: true)
             panelWindow.orderFrontRegardless()
+            isPanelVisible = true
             startOutsideClickMonitor()
             return
         }
@@ -262,11 +264,13 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
         panelWindow.setFrame(NSRect(x: x, y: y, width: size.width, height: size.height), display: true)
         panelWindow.orderFrontRegardless()
+        isPanelVisible = true
         startOutsideClickMonitor()
     }
 
     private func hidePanel() {
         panelWindow.orderOut(nil)
+        isPanelVisible = false
         stopOutsideClickMonitor()
     }
 
@@ -323,8 +327,22 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         QuotaMonitor.shared.setClaudeBridge(available: claudeUsageAvailable, connected: claudeUsageConnected)
     }
 
+    private func refreshClaudeUsageStateAsync() {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let available = ClaudeBridgeManager.shared.isClaudeAvailable
+            let connected = ClaudeBridgeManager.shared.isConnected
+            Task { @MainActor in
+                self?.claudeUsageAvailable = available
+                self?.claudeUsageConnected = connected
+                QuotaMonitor.shared.setClaudeBridge(available: available, connected: connected)
+            }
+        }
+    }
+
     private func showContextMenu(from sender: NSStatusBarButton) {
-        hidePanel()
+        if isPanelVisible {
+            hidePanel()
+        }
         let menu = NSMenu()
 
         let loginItem = NSMenuItem(title: "Start at Login", action: #selector(toggleStartAtLogin(_:)), keyEquivalent: "")
