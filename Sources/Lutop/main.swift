@@ -110,11 +110,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var timer: Timer?
     private var outsideClickMonitor: Any?
-    private var rightClickMonitor: Any?
     private var startAtLoginEnabled = false
     private var claudeUsageAvailable = false
     private var claudeUsageConnected = false
     private var isPanelVisible = false
+    private var latestSnapshot: MetricsSnapshot?
     private lazy var panelWindow: NSPanel = {
         let window = NSPanel(
             contentRect: NSRect(origin: .zero, size: panel.bounds.size),
@@ -136,10 +136,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.target = self
-        item.button?.action = #selector(togglePanel(_:))
-        item.button?.sendAction(on: [.leftMouseDown])
+        item.button?.action = #selector(handleStatusItemClick(_:))
+        item.button?.sendAction(on: [.leftMouseDown, .rightMouseDown])
         statusItem = item
-        startRightClickMonitor()
         startClaudeQuotaObserver()
         try? LoginItemManager.shared.migrateIfNeeded()
         startAtLoginEnabled = LoginItemManager.shared.isEnabled
@@ -155,7 +154,12 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
-    @objc private func togglePanel(_ sender: NSStatusBarButton) {
+    @objc private func handleStatusItemClick(_ sender: NSStatusBarButton) {
+        if NSApp.currentEvent?.type == .rightMouseDown {
+            showContextMenu(from: sender)
+            return
+        }
+
         if isPanelVisible {
             hidePanel()
             return
@@ -171,8 +175,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func display(_ snapshot: MetricsSnapshot) {
-        panel.render(snapshot)
+        latestSnapshot = snapshot
         updateStatusItem(snapshot)
+        if isPanelVisible {
+            panel.render(snapshot)
+        }
     }
 
     @objc private func toggleStartAtLogin(_ sender: Any?) {
@@ -242,7 +249,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showPanel(from sender: NSStatusBarButton) {
-        refresh()
+        if let latestSnapshot {
+            panel.render(latestSnapshot)
+        }
 
         let size = panel.bounds.size
         guard let sourceWindow = sender.window else {
@@ -250,6 +259,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             panelWindow.orderFrontRegardless()
             isPanelVisible = true
             startOutsideClickMonitor()
+            refresh()
             return
         }
 
@@ -266,6 +276,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         panelWindow.orderFrontRegardless()
         isPanelVisible = true
         startOutsideClickMonitor()
+        refresh()
     }
 
     private func hidePanel() {
@@ -287,28 +298,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         if let outsideClickMonitor {
             NSEvent.removeMonitor(outsideClickMonitor)
             self.outsideClickMonitor = nil
-        }
-    }
-
-    private func startRightClickMonitor() {
-        if let rightClickMonitor {
-            NSEvent.removeMonitor(rightClickMonitor)
-        }
-
-        rightClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown]) { [weak self] event in
-            guard let self,
-                  let sender = self.statusItem?.button,
-                  event.window === sender.window else {
-                return event
-            }
-
-            let point = sender.convert(event.locationInWindow, from: nil)
-            guard sender.bounds.contains(point) else {
-                return event
-            }
-
-            self.showContextMenu(from: sender)
-            return nil
         }
     }
 
