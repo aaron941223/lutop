@@ -5,6 +5,7 @@ set -euo pipefail
 INSTALL_DIR="${LUTOP_INSTALL_DIR:-$HOME/Applications}"
 INSTALL_APP="$INSTALL_DIR/Lutop.app"
 LAUNCH_AGENT="${LUTOP_LAUNCH_AGENT:-$HOME/Library/LaunchAgents/dev.yiminglu.lutop.login.plist}"
+APP_SUPPORT="${LUTOP_APP_SUPPORT:-$HOME/Library/Application Support/Lutop}"
 
 if pgrep -x Lutop >/dev/null 2>&1; then
   pkill -x Lutop || true
@@ -20,6 +21,8 @@ fi
 
 rm -rf "$INSTALL_APP"
 rm -f "$LAUNCH_AGENT"
+rm -rf "$APP_SUPPORT"
 
 echo "Removed $INSTALL_APP"
 echo "Removed $LAUNCH_AGENT"
+echo "Removed $APP_SUPPORT"

@@ -12,6 +12,7 @@ let package = Package(
         .executable(name: "Lutop", targets: ["Lutop"])
     ],
     targets: [
-        .executableTarget(name: "Lutop")
+        .executableTarget(name: "Lutop"),
+        .testTarget(name: "LutopTests", dependencies: ["Lutop"])
     ]
 )

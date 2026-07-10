@@ -1,6 +1,6 @@
 # Lutop
 
-Lutop is a lightweight macOS menu bar resource monitor with a Mole-style compact terminal dashboard. It shows CPU, memory, disk, power, processes, network, and local Codex / Claude Code quota information in a dense two-column panel.
+Lutop is a lightweight macOS menu bar resource monitor with a Mole-style compact terminal dashboard. It shows CPU, memory, disk, power, processes, network, local Codex / Claude Code quota information, and date reminders in a dense two-column panel.
 
 It is designed to stay small: no Dock icon, no package installer, no background helper daemon, no usage cache, and no telemetry.
 
@@ -21,6 +21,8 @@ It is designed to stay small: no Dock icon, no package installer, no background 
 - Network up/down rates and proxy status.
 - Codex quota from local `~/.codex/sessions/**/*.jsonl` `rate_limits`.
 - Claude Code quota through an optional local status line bridge.
+- Local one-time, weekly, monthly, and yearly date reminders with urgency colors.
+- Optional Keep Awake toggle backed by a Lutop-managed `caffeinate -dimsu` process.
 - Optional Start at Login via a per-user LaunchAgent.
 
 ## Build And Run
@@ -29,7 +31,19 @@ It is designed to stay small: no Dock icon, no package installer, no background 
 make run
 ```
 
-The app hides its Dock icon and stays in the system menu bar. Click the status item to open the panel. Right-click the status item for Start at Login, `Update Code Usage`, and Claude Code disconnect controls.
+The app hides its Dock icon and stays in the system menu bar. Click the status item to open the panel. Right-click the status item for Start at Login, Keep Awake, date reminders, `Update Code Usage`, and Claude Code disconnect controls.
+
+## Date Reminders
+
+The bottom dashboard places Codex and Claude Code usage on the left and date reminders on the right. Reminder rows are ordered by urgency:
+
+- due or overdue reminders are red,
+- reminders inside their configured warning period are yellow,
+- later reminders use the normal text color.
+
+Use the right-click `Date Reminders` submenu to add, complete, edit, or delete reminders. Add and Edit use a compact form rather than a separate management window. Each reminder can repeat once, weekly, monthly, or yearly and can warn 1, 3, 7, 14, or 30 days in advance.
+
+Completing a one-time reminder deletes it. Completing a recurring reminder advances it to the first future occurrence. Reminders are stored locally at `~/Library/Application Support/Lutop/reminders.json` and are never uploaded.
 
 ## Build App Bundle
 
@@ -54,9 +68,9 @@ This builds a release bundle, copies it to `~/Applications/Lutop.app`, ad-hoc si
 make uninstall
 ```
 
-This quits Lutop, restores any Lutop-owned Claude Code status line bridge, removes `~/Applications/Lutop.app`, and removes `~/Library/LaunchAgents/dev.yiminglu.lutop.login.plist`.
+This quits Lutop, restores any Lutop-owned Claude Code status line bridge, removes `~/Applications/Lutop.app`, removes `~/Library/LaunchAgents/dev.yiminglu.lutop.login.plist`, and removes `~/Library/Application Support/Lutop`.
 
-Lutop does not create a pkg receipt, cache folder, Application Support folder, preferences file, usage cache, or runtime temp files. Development files such as `.build` and `dist` are managed by `make clean`.
+Lutop does not create a pkg receipt, cache folder, preferences file, usage cache, or runtime temp files. Its only Application Support data is the reminder JSON file. Development files such as `.build` and `dist` are managed by `make clean`.
 
 ## Debug Snapshot
 
@@ -65,6 +79,14 @@ make snapshot
 ```
 
 This prints the same dashboard text used by the popover and exits.
+
+## Tests
+
+```sh
+make test
+```
+
+The test wrapper supplies the Swift Testing framework paths required by Command Line Tools-only installations.
 
 ## Codex Quota
 
@@ -93,7 +115,7 @@ Claude Code quota is only updated after Claude Code emits its next status line J
 
 ## Privacy
 
-Lutop reads local system APIs and local quota files only. It does not upload data, does not write usage history, and does not create a cache for quota data.
+Lutop reads local system APIs, local quota files, and its local reminder file only. It does not upload data, does not write usage history, and does not create a cache for quota data.
 
 ## Reference Projects
 

@@ -106,7 +106,7 @@ private final class SnapshotProvider: @unchecked Sendable {
 @MainActor
 private final class AppDelegate: NSObject, NSApplicationDelegate {
     private let snapshotProvider = SnapshotProvider()
-    private let panel = MonitorPanelView(frame: NSRect(x: 0, y: 0, width: 695, height: 368))
+    private let panel = MonitorPanelView(frame: NSRect(x: 0, y: 0, width: 695, height: 464))
     private var statusItem: NSStatusItem?
     private var timer: Timer?
     private var outsideClickMonitor: Any?
@@ -115,6 +115,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var claudeUsageConnected = false
     private var isPanelVisible = false
     private var latestSnapshot: MetricsSnapshot?
+    private var temporaryStatusMenu: NSMenu?
+    private var keepAwakeProcess: Process?
     private lazy var panelWindow: NSPanel = {
         let window = NSPanel(
             contentRect: NSRect(origin: .zero, size: panel.bounds.size),
@@ -154,6 +156,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        stopKeepAwake(waitUntilExit: true)
+    }
+
     @objc private func handleStatusItemClick(_ sender: NSStatusBarButton) {
         if NSApp.currentEvent?.type == .rightMouseDown {
             showContextMenu(from: sender)
@@ -189,6 +195,72 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             startAtLoginEnabled = nextValue
         } catch {
             showAlert(title: "Unable to update Start at Login", message: error.localizedDescription)
+        }
+    }
+
+    @objc private func toggleKeepAwake(_ sender: Any?) {
+        if isKeepAwakeEnabled {
+            stopKeepAwake(waitUntilExit: false)
+            return
+        }
+
+        do {
+            try startKeepAwake()
+        } catch {
+            showAlert(title: "Unable to enable Keep Awake", message: error.localizedDescription)
+        }
+    }
+
+    @objc private func addReminder(_ sender: Any?) {
+        guard let reminder = ReminderEditor.present() else {
+            return
+        }
+        saveReminder(reminder)
+    }
+
+    @objc private func editReminder(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? UUID,
+              let existing = ReminderStore.shared.allReminders().first(where: { $0.id == id }),
+              let reminder = ReminderEditor.present(existing: existing) else {
+            return
+        }
+        saveReminder(reminder)
+    }
+
+    @objc private func completeReminder(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? UUID else {
+            return
+        }
+        do {
+            try ReminderStore.shared.complete(id: id)
+            refresh()
+        } catch {
+            showAlert(title: "Unable to complete reminder", message: error.localizedDescription)
+        }
+    }
+
+    @objc private func deleteReminder(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? UUID,
+              let reminder = ReminderStore.shared.allReminders().first(where: { $0.id == id }) else {
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "Delete \"\(reminder.title)\"?"
+        alert.informativeText = "This reminder will be removed permanently."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            return
+        }
+
+        do {
+            try ReminderStore.shared.delete(id: id)
+            refresh()
+        } catch {
+            showAlert(title: "Unable to delete reminder", message: error.localizedDescription)
         }
     }
 
@@ -301,6 +373,69 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private var isKeepAwakeEnabled: Bool {
+        keepAwakeProcess?.isRunning == true
+    }
+
+    private func startKeepAwake() throws {
+        guard !isKeepAwakeEnabled else {
+            return
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/caffeinate")
+        process.arguments = ["-dimsu"]
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        process.terminationHandler = { [weak self] finishedProcess in
+            let processIdentifier = finishedProcess.processIdentifier
+            Task { @MainActor in
+                self?.clearKeepAwakeIfCurrent(processIdentifier: processIdentifier)
+            }
+        }
+
+        keepAwakeProcess = process
+        do {
+            try process.run()
+        } catch {
+            keepAwakeProcess = nil
+            process.terminationHandler = nil
+            throw error
+        }
+        refreshStatusItemAppearance()
+    }
+
+    private func stopKeepAwake(waitUntilExit: Bool) {
+        guard let process = keepAwakeProcess else {
+            return
+        }
+
+        keepAwakeProcess = nil
+        process.terminationHandler = nil
+        if process.isRunning {
+            process.terminate()
+            if waitUntilExit {
+                process.waitUntilExit()
+            }
+        }
+        refreshStatusItemAppearance()
+    }
+
+    private func clearKeepAwakeIfCurrent(processIdentifier: Int32) {
+        guard keepAwakeProcess?.processIdentifier == processIdentifier else {
+            return
+        }
+
+        keepAwakeProcess = nil
+        refreshStatusItemAppearance()
+    }
+
+    private func refreshStatusItemAppearance() {
+        if let latestSnapshot {
+            updateStatusItem(latestSnapshot)
+        }
+    }
+
     private func startClaudeQuotaObserver() {
         DistributedNotificationCenter.default().addObserver(
             self,
@@ -332,12 +467,31 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         if isPanelVisible {
             hidePanel()
         }
+
+        let menu = contextMenu()
+        temporaryStatusMenu = menu
+        statusItem?.menu = menu
+        sender.performClick(nil)
+        statusItem?.menu = nil
+        temporaryStatusMenu = nil
+    }
+
+    private func contextMenu() -> NSMenu {
         let menu = NSMenu()
 
         let loginItem = NSMenuItem(title: "Start at Login", action: #selector(toggleStartAtLogin(_:)), keyEquivalent: "")
         loginItem.target = self
         loginItem.state = startAtLoginEnabled ? .on : .off
         menu.addItem(loginItem)
+
+        let keepAwakeItem = NSMenuItem(title: "Keep Awake", action: #selector(toggleKeepAwake(_:)), keyEquivalent: "")
+        keepAwakeItem.target = self
+        keepAwakeItem.state = isKeepAwakeEnabled ? .on : .off
+        menu.addItem(keepAwakeItem)
+
+        let remindersItem = NSMenuItem(title: "Date Reminders", action: nil, keyEquivalent: "")
+        remindersItem.submenu = reminderMenu()
+        menu.addItem(remindersItem)
         menu.addItem(.separator())
 
         let usageItem = NSMenuItem(title: "Update Code Usage", action: #selector(updateCodeUsage(_:)), keyEquivalent: "")
@@ -355,14 +509,83 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         quitItem.target = self
         menu.addItem(quitItem)
 
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.minY), in: sender)
+        return menu
+    }
+
+    private func reminderMenu() -> NSMenu {
+        let menu = NSMenu()
+        let addItem = NSMenuItem(title: "Add Reminder…", action: #selector(addReminder(_:)), keyEquivalent: "")
+        addItem.target = self
+        menu.addItem(addItem)
+
+        let dashboardItems = ReminderStore.shared.dashboardItems()
+        let dueItems = dashboardItems.filter { $0.urgency == .due }
+        if !dueItems.isEmpty {
+            menu.addItem(.separator())
+            menu.addItem(reminderSubmenuItem(
+                title: "Complete Reminder",
+                items: dueItems,
+                action: #selector(completeReminder(_:))
+            ))
+        }
+
+        if !dashboardItems.isEmpty {
+            menu.addItem(.separator())
+            menu.addItem(reminderSubmenuItem(
+                title: "Edit Reminder",
+                items: dashboardItems,
+                action: #selector(editReminder(_:))
+            ))
+            menu.addItem(reminderSubmenuItem(
+                title: "Delete Reminder",
+                items: dashboardItems,
+                action: #selector(deleteReminder(_:))
+            ))
+        }
+        return menu
+    }
+
+    private func reminderSubmenuItem(
+        title: String,
+        items: [ReminderDashboardItem],
+        action: Selector
+    ) -> NSMenuItem {
+        let parent = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        for item in items {
+            let child = NSMenuItem(
+                title: reminderMenuTitle(item),
+                action: action,
+                keyEquivalent: ""
+            )
+            child.target = self
+            child.representedObject = item.reminder.id
+            submenu.addItem(child)
+        }
+        parent.submenu = submenu
+        return parent
+    }
+
+    private func reminderMenuTitle(_ item: ReminderDashboardItem) -> String {
+        let date = String(format: "%d/%02d", item.dueDate.month, item.dueDate.day)
+        return "\(item.reminder.title) — \(date)"
+    }
+
+    private func saveReminder(_ reminder: DateReminder) {
+        do {
+            try ReminderStore.shared.upsert(reminder)
+            refresh()
+        } catch {
+            showAlert(title: "Unable to save reminder", message: error.localizedDescription)
+        }
     }
 
     private func updateStatusItem(_ snapshot: MetricsSnapshot) {
         let attributed = NSMutableAttributedString()
-        appendStatus("CPU ", to: attributed, color: NSColor.labelColor)
+        let labelColor = isKeepAwakeEnabled ? NSColor.systemCyan : NSColor.labelColor
+        appendStatus("CPU ", to: attributed, color: labelColor)
         appendStatus("\(Int(snapshot.cpu.totalUsage.rounded()))%", to: attributed, color: NSColor.labelColor)
-        appendStatus("  MEM ", to: attributed, color: NSColor.labelColor)
+        appendStatus("  MEM ", to: attributed, color: labelColor)
         appendStatus("\(Int(snapshot.memory.usedPercent.rounded()))% ", to: attributed, color: NSColor.labelColor)
         statusItem?.button?.attributedTitle = attributed
         statusItem?.button?.toolTip = "Lutop resource monitor"
@@ -780,10 +1003,39 @@ private enum DashboardRenderer {
         let lines: [String]
     }
 
+    private struct DashboardLine {
+        let text: String
+        let reminderRange: NSRange?
+        let reminderUrgency: ReminderUrgency?
+
+        init(_ text: String, reminderRange: NSRange? = nil, reminderUrgency: ReminderUrgency? = nil) {
+            self.text = text
+            self.reminderRange = reminderRange
+            self.reminderUrgency = reminderUrgency
+        }
+    }
+
+    private struct ReminderLine {
+        let text: String
+        let urgency: ReminderUrgency?
+    }
+
+    private struct RenderedDashboard {
+        let lines: [DashboardLine]
+
+        var text: String {
+            lines.map(\.text).joined(separator: "\n")
+        }
+    }
+
     private static let columnWidth = 45
     private static let columnGap = "  "
     private static let labelWidth = 6
     private static let barWidth = 16
+    private static let reminderCountdownWidth = 10
+    private static var reminderCountdownTabColumn: Int {
+        columnWidth + columnGap.count + columnWidth - reminderCountdownWidth
+    }
     private static let timeFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -804,9 +1056,9 @@ private enum DashboardRenderer {
 
     @MainActor
     static func attributedText(for snapshot: MetricsSnapshot) -> NSAttributedString {
-        let text = plainText(for: snapshot)
+        let rendered = renderedDashboard(for: snapshot, useReminderTabs: true)
         let output = NSMutableAttributedString(
-            string: text,
+            string: rendered.text,
             attributes: [
                 .font: Fonts.panel,
                 .foregroundColor: Palette.foreground
@@ -822,29 +1074,32 @@ private enum DashboardRenderer {
         emphasizeTitles(in: output)
         colorBars(in: output)
         colorTemperatures(in: output)
+        colorReminderLines(rendered.lines, in: output)
         applyHeaderSpacing(in: output)
         return output
     }
 
     static func plainText(for snapshot: MetricsSnapshot) -> String {
-        var lines: [String] = []
-        lines.append(
-            headerLine(snapshot).fit(to: totalWidth)
-        )
+        renderedDashboard(for: snapshot).text
+    }
 
-        let cards = [
+    private static func renderedDashboard(
+        for snapshot: MetricsSnapshot,
+        useReminderTabs: Bool = false
+    ) -> RenderedDashboard {
+        var lines = [DashboardLine(headerLine(snapshot).fit(to: totalWidth))]
+        let systemCards = [
             cpuCard(snapshot.cpu),
             memoryCard(snapshot.memory),
             diskCard(snapshot.disk),
             powerCard(snapshot.battery),
             processCard(snapshot.processes),
-            networkCard(snapshot.network),
-            quotaCard(title: "Codex", icon: "◎", status: snapshot.quota.codex),
-            quotaCard(title: "Claude", icon: "✳", status: snapshot.quota.claude)
+            networkCard(snapshot.network)
         ]
-        lines.append(renderCards(cards))
-
-        return lines.joined(separator: "\n")
+        lines.append(contentsOf: renderCardPairs(systemCards).map { DashboardLine($0) })
+        lines.append(DashboardLine(""))
+        lines.append(contentsOf: renderBottomSection(snapshot, useReminderTabs: useReminderTabs))
+        return RenderedDashboard(lines: lines)
     }
 
     private static func headerLine(_ snapshot: MetricsSnapshot) -> String {
@@ -1009,7 +1264,7 @@ private enum DashboardRenderer {
         }
     }
 
-    private static func renderCards(_ cards: [Card]) -> String {
+    private static func renderCardPairs(_ cards: [Card]) -> [String] {
         var rows: [String] = []
         var index = 0
         while index < cards.count {
@@ -1027,7 +1282,149 @@ private enum DashboardRenderer {
                 rows.append("")
             }
         }
-        return rows.joined(separator: "\n")
+        return rows
+    }
+
+    private static func renderBottomSection(
+        _ snapshot: MetricsSnapshot,
+        useReminderTabs: Bool
+    ) -> [DashboardLine] {
+        let codex = renderCard(quotaCard(title: "Codex", icon: "◎", status: snapshot.quota.codex))
+        let claude = renderCard(quotaCard(title: "Claude", icon: "✳", status: snapshot.quota.claude))
+        var aiLines = codex + [""] + claude
+        let reminderLines = renderReminderCard(snapshot.reminders, useTabs: useReminderTabs)
+        let targetHeight = max(11, aiLines.count, reminderLines.count)
+        aiLines += Array(repeating: "", count: targetHeight - aiLines.count)
+        let paddedReminders = reminderLines + Array(
+            repeating: ReminderLine(text: "", urgency: nil),
+            count: targetHeight - reminderLines.count
+        )
+
+        return (0..<targetHeight).map { index in
+            let left = aiLines[index].columnPadded(to: columnWidth)
+            let right = padDisplayColumns(paddedReminders[index].text, to: columnWidth)
+            let combined = left + columnGap + right
+            guard let urgency = paddedReminders[index].urgency else {
+                return DashboardLine(combined)
+            }
+            let location = (left + columnGap).utf16.count
+            let length = paddedReminders[index].text.utf16.count
+            return DashboardLine(
+                combined,
+                reminderRange: NSRange(location: location, length: length),
+                reminderUrgency: urgency
+            )
+        }
+    }
+
+    private static func renderReminderCard(
+        _ items: [ReminderDashboardItem],
+        useTabs: Bool
+    ) -> [ReminderLine] {
+        let title = "◷ Reminders"
+        let separatorCount = max(0, columnWidth - displayColumns(title) - 2)
+        let header = padDisplayColumns("\(title)  \(String(repeating: "╌", count: separatorCount))", to: columnWidth)
+        var lines = [ReminderLine(text: header, urgency: nil)]
+
+        if items.isEmpty {
+            lines.append(ReminderLine(text: "No reminders", urgency: nil))
+        } else {
+            let visibleItems = items.count > 10 ? Array(items.prefix(9)) : Array(items.prefix(10))
+            lines.append(contentsOf: visibleItems.map { item in
+                ReminderLine(text: reminderText(item, useTab: useTabs), urgency: item.urgency)
+            })
+            if items.count > 10 {
+                lines.append(ReminderLine(text: "+\(items.count - 9) more", urgency: nil))
+            }
+        }
+        lines += Array(repeating: ReminderLine(text: "", urgency: nil), count: max(0, 11 - lines.count))
+        return Array(lines.prefix(11))
+    }
+
+    private static func reminderText(_ item: ReminderDashboardItem, useTab: Bool) -> String {
+        let marker = item.reminder.recurrence == .none ? "  " : "↻ "
+        let date = String(format: "%d/%02d", item.dueDate.month, item.dueDate.day)
+        let relative: String
+        if item.daysUntilDue < 0 {
+            relative = "\(abs(item.daysUntilDue))d late"
+        } else if item.daysUntilDue == 0 {
+            relative = "Today"
+        } else {
+            relative = "in \(item.daysUntilDue)d"
+        }
+
+        let prefix = "\(marker)\(date)  "
+        let titleWidth = max(1, columnWidth - displayColumns(prefix) - 2 - reminderCountdownWidth)
+        let title = fitDisplayColumns(item.reminder.title, to: titleWidth)
+        if useTab {
+            return prefix + title + "\t" + relative
+        }
+        let spacing = String(repeating: " ", count: max(0, titleWidth - displayColumns(title)))
+        let countdown = padDisplayColumns(relative, to: reminderCountdownWidth)
+        return prefix + title + spacing + "  " + countdown
+    }
+
+    private static func displayColumns(_ text: String) -> Int {
+        text.reduce(0) { $0 + characterColumns($1) }
+    }
+
+    private static func fitDisplayColumns(_ text: String, to width: Int) -> String {
+        guard width > 0 else {
+            return ""
+        }
+        guard displayColumns(text) > width else {
+            return text
+        }
+        if width == 1 {
+            return "…"
+        }
+
+        var output = ""
+        var used = 0
+        for character in text {
+            let characterWidth = characterColumns(character)
+            if used + characterWidth > width - 1 {
+                break
+            }
+            output.append(character)
+            used += characterWidth
+        }
+        return output + "…"
+    }
+
+    private static func padDisplayColumns(_ text: String, to width: Int) -> String {
+        let fitted = fitDisplayColumns(text, to: width)
+        return fitted + String(repeating: " ", count: max(0, width - displayColumns(fitted)))
+    }
+
+    private static func characterColumns(_ character: Character) -> Int {
+        var width = 0
+        for scalar in character.unicodeScalars {
+            switch scalar.properties.generalCategory {
+            case .nonspacingMark, .spacingMark, .enclosingMark, .format:
+                continue
+            default:
+                width = max(width, isWideScalar(scalar.value) ? 2 : 1)
+            }
+        }
+        return max(width, 1)
+    }
+
+    private static func isWideScalar(_ value: UInt32) -> Bool {
+        value >= 0x1100 && (
+            value <= 0x115F
+                || value == 0x2329
+                || value == 0x232A
+                || (0x2E80...0xA4CF).contains(value)
+                || (0xAC00...0xD7A3).contains(value)
+                || (0xF900...0xFAFF).contains(value)
+                || (0xFE10...0xFE19).contains(value)
+                || (0xFE30...0xFE6F).contains(value)
+                || (0xFF00...0xFF60).contains(value)
+                || (0xFFE0...0xFFE6).contains(value)
+                || (0x1F300...0x1FAFF).contains(value)
+                || (0x20000...0x3FFFD).contains(value)
+        )
     }
 
     private static func renderCard(_ card: Card) -> [String] {
@@ -1327,7 +1724,7 @@ private enum DashboardRenderer {
         let full = output.string as NSString
         applyTitleWord("Status", in: output, full: full)
 
-        let titles = ["◉ CPU", "◫ Memory", "▥ Disk", "◪ Power", "❊ Processes", "⇅ Network", "◎ Codex", "✳ Claude"]
+        let titles = ["◉ CPU", "◫ Memory", "▥ Disk", "◪ Power", "❊ Processes", "⇅ Network", "◎ Codex", "✳ Claude", "◷ Reminders"]
 
         for title in titles {
             var searchRange = NSRange(location: 0, length: full.length)
@@ -1427,6 +1824,47 @@ private enum DashboardRenderer {
         }
     }
 
+    @MainActor
+    private static func colorReminderLines(_ lines: [DashboardLine], in output: NSMutableAttributedString) {
+        var lineOffset = 0
+        for line in lines {
+            if let range = line.reminderRange, let urgency = line.reminderUrgency {
+                let color: NSColor
+                switch urgency {
+                case .due:
+                    color = Palette.red
+                case .warning:
+                    color = Palette.yellow
+                case .normal:
+                    color = Palette.foreground
+                }
+                output.addAttribute(
+                    .foregroundColor,
+                    value: color,
+                    range: NSRange(location: lineOffset + range.location, length: range.length)
+                )
+                if line.text.contains("\t") {
+                    let characterWidth = ("0" as NSString).size(withAttributes: [.font: Fonts.panel]).width
+                    let style = NSMutableParagraphStyle()
+                    style.lineBreakMode = .byClipping
+                    style.tabStops = [
+                        NSTextTab(
+                            textAlignment: .left,
+                            location: characterWidth * CGFloat(reminderCountdownTabColumn),
+                            options: [:]
+                        )
+                    ]
+                    output.addAttribute(
+                        .paragraphStyle,
+                        value: style,
+                        range: NSRange(location: lineOffset, length: line.text.utf16.count)
+                    )
+                }
+            }
+            lineOffset += line.text.utf16.count + 1
+        }
+    }
+
     private static func applyHeaderSpacing(in output: NSMutableAttributedString) {
         let full = output.string as NSString
         guard full.length > 0 else {
@@ -1492,6 +1930,7 @@ private struct MetricsSnapshot {
     let network: NetworkMetrics
     let processes: [TopProcess]
     let quota: QuotaSnapshot
+    let reminders: [ReminderDashboardItem]
 }
 
 private struct HardwareInfo {
@@ -1951,6 +2390,7 @@ private final class SystemMonitor {
         let network = collectNetwork()
         let processes = collectProcessesIfNeeded()
         let quota = QuotaMonitor.shared.snapshot()
+        let reminders = ReminderStore.shared.dashboardItems()
         let uptimeSeconds = Self.collectUptimeSeconds()
         let health = healthScore(cpu: cpu, memory: memory, disk: disk, battery: battery, uptimeSeconds: uptimeSeconds)
 
@@ -1965,7 +2405,8 @@ private final class SystemMonitor {
             battery: battery,
             network: network,
             processes: processes,
-            quota: quota
+            quota: quota,
+            reminders: reminders
         )
     }
 
